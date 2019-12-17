@@ -1,0 +1,62 @@
+import hudson.model.*
+
+def nextVersion
+def project_name = "Jira Demo" //can be paramatized via jenkins gui for versatility
+pipeline{
+    agent any
+
+    options{
+        gitLabConnection('gitlabconnection')
+        timestamps() 
+    }//options   
+    environment {
+        JIRA_URL = 'http://jira:8080'
+        J_USER = 'jira-root'
+    }//env
+    stages{ 
+        stage("nextVersion"){
+            steps{
+                script{
+                    if (gitlabMergeRequestState.equals("merged")){
+                        echo "merging to ${gitlabTargetBranch} from ${gitlabSourceBranch}"
+                        if (gitlabTargetBranch.contains("release/")){
+
+                            havetag_exitstatus=sh(script: 'git describe --exact-match --tags HEAD',returnStatus: true)
+                            havetag=(havetag_exitstatus!=0)
+                            nextVersion = sh(script: "bash ci/fetchTags.sh ${gitlabTargetBranch} ${havetag}",returnStdout: true).trim()
+                        }
+                        if (gitlabTargetBranch.equals("master")){
+                            nextVersion="master."+GIT_COMMIT.substring(0,5)
+                        }
+                    }
+                }//script
+            }//steps
+        }//nextVersion
+        stage("Create Version @ JIRA"){
+            steps {
+                script{
+                        if (gitlabMergeRequestState.equals("merged")){
+                            withCredentials([usernameColonPassword(credentialsId: 'jira-root', variable: 'USERPASS')]) {
+                                sh("bash -c 'python ci/merge_and_close.py ${USERPASS} ${nextVersion} ${JIRA_URL} ${gitlabSourceBranch} ${project_name}'")
+                        }//if
+                    }//dir
+                }//script
+            }//steps
+        }//Create Version@JIRA
+        stage("Close Issue") {
+            steps{
+                script{
+                        if (gitlabMergeRequestState.equals("merged")){
+                            withCredentials([usernameColonPassword(credentialsId: 'jira-root', variable: 'USERPASS')]) {
+                                sh '''
+                                    set +x
+                                    ci/jira_status.sh -U $JIRA_URL -c "close" -i $gitlabSourceBranch -u $USERPASS
+                                '''
+                                }
+                        }//if
+                }//script
+            }//steps
+        }//Close Issue
+     
+    }//stages
+}//pipeline
